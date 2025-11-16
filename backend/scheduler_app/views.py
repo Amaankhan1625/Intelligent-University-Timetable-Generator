@@ -1,9 +1,15 @@
+# backend/scheduler_app/views.py
 from rest_framework import viewsets, status, permissions
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from django.http import HttpResponse
 from django.contrib.auth.models import User
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+import logging
+import uuid
+
 from .models import (
     Instructor, Room, MeetingTime, Department,
     Course, Section, Class, Timetable
@@ -11,7 +17,9 @@ from .models import (
 from .serializers import *
 from .genetic_algorithm import GeneticAlgorithm
 from .utils import export_timetable_pdf, export_timetable_excel
-import uuid
+
+logger = logging.getLogger(__name__)
+
 
 # ----------------------------------------
 # ✅ User Profile (JWT-based authentication)
@@ -50,6 +58,20 @@ class MeetingTimeViewSet(viewsets.ModelViewSet):
     serializer_class = MeetingTimeSerializer
     permission_classes = [permissions.IsAuthenticated]
 
+    @action(detail=False, methods=['post'])
+    def populate_default_slots(self, request):
+        """
+        Populate default meeting time slots (9:00-17:00 1hr) for Mon-Sat.
+        Will not duplicate existing identical slots.
+        """
+        try:
+            MeetingTime.generate_default_slots()
+            count = MeetingTime.objects.count()
+            return Response({'message': 'Default meeting times generated', 'total_slots': count})
+        except Exception as e:
+            logger.exception("Failed to populate default meeting times")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
 
 class DepartmentViewSet(viewsets.ModelViewSet):
     queryset = Department.objects.all()
@@ -63,10 +85,17 @@ class CourseViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
+        """
+        Optionally filter by department (id) and year.
+        Example: /api/courses/?department=1&year=2
+        """
         queryset = Course.objects.all()
-        section = self.request.query_params.get('section')
-        if section:
-            queryset = queryset.filter(section_id=section)
+        department = self.request.query_params.get('department')
+        year = self.request.query_params.get('year')
+        if department:
+            queryset = queryset.filter(department_id=department)
+        if year:
+            queryset = queryset.filter(year=year)
         return queryset
 
 
@@ -86,34 +115,36 @@ class SectionViewSet(viewsets.ModelViewSet):
         return queryset
 
     def create(self, request, *args, **kwargs):
+        """
+        Create a Section. Accepts optional
+        `course_instructor_assignments` dict in payload to set instructors for courses.
+        """
         data = request.data.copy()
         course_instructor_assignments = data.pop('course_instructor_assignments', {})
 
-        # Create the section first
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
         section = serializer.save()
 
-        # Update course instructor assignments
+        # Update course-instructor assignments if provided
         self._update_course_instructors(course_instructor_assignments)
-
         headers = self.get_success_headers(serializer.data)
         return Response(serializer.data, status=status.HTTP_201_CREATED, headers=headers)
 
     def update(self, request, *args, **kwargs):
+        """
+        Update a Section; supports same `course_instructor_assignments`.
+        """
         partial = kwargs.pop('partial', False)
         instance = self.get_object()
         data = request.data.copy()
         course_instructor_assignments = data.pop('course_instructor_assignments', {})
 
-        # Update the section
         serializer = self.get_serializer(instance, data=data, partial=partial)
         serializer.is_valid(raise_exception=True)
         section = serializer.save()
 
-        # Update course instructor assignments
         self._update_course_instructors(course_instructor_assignments)
-
         return Response(serializer.data)
 
     def _update_course_instructors(self, course_instructor_assignments):
@@ -122,6 +153,7 @@ class SectionViewSet(viewsets.ModelViewSet):
             try:
                 course = Course.objects.get(id=course_id)
                 instructor = Instructor.objects.get(id=instructor_id)
+                # Replace the instructor list with the single instructor for that course (you can change logic)
                 course.instructors.set([instructor])
             except (Course.DoesNotExist, Instructor.DoesNotExist):
                 continue
@@ -130,12 +162,32 @@ class SectionViewSet(viewsets.ModelViewSet):
     def instructors(self, request, pk=None):
         """Get instructors who teach courses assigned to this section"""
         section = self.get_object()
-        # Get all instructors who teach courses assigned to this section
-        instructors = Instructor.objects.filter(
-            courses_teaching__sections=section
-        ).distinct()
+        instructors = Instructor.objects.filter(courses_teaching__sections=section).distinct()
         serializer = InstructorSerializer(instructors, many=True)
         return Response(serializer.data)
+
+    @action(detail=True, methods=['post'])
+    def auto_assign_courses(self, request, pk=None):
+        """
+        Assign department/year/semester matching courses to this section.
+        Useful to quickly populate sections with their standard course lists.
+        """
+        section = self.get_object()
+        try:
+            dept_courses = Course.objects.filter(
+                department=section.department,
+                year=section.year,
+                semester=section.semester
+            )
+            section.courses.set(dept_courses)
+            return Response({
+                'message': 'Courses auto-assigned to section',
+                'section': section.section_id,
+                'assigned_count': dept_courses.count()
+            })
+        except Exception as e:
+            logger.exception("Failed to auto-assign courses to section")
+            return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
 
 class ClassViewSet(viewsets.ModelViewSet):
@@ -164,16 +216,32 @@ class TimetableViewSet(viewsets.ModelViewSet):
     # ----------------------------------------
     @action(detail=False, methods=['post'])
     def generate(self, request):
+        """
+        Expected POST JSON shape (examples):
+        1) Single-department single-year:
+           { "department_id": 1, "years": [1], "semester": 1, ... }
+
+        2) Combined multiple depts/years:
+           { "department_ids": [1,2], "years": [1,2], "semester": 1, ... }
+
+        The GeneticAlgorithm implementation must accept the args used below.
+        """
         serializer = TimetableGenerationSerializer(data=request.data)
         if not serializer.is_valid():
             return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
         data = serializer.validated_data
 
+        # normalize inputs to the GA interface used here
+        department_ids = data.get('department_ids') or ([data['department_id']] if data.get('department_id') else [])
+        years = data.get('years') or ([data['year']] if data.get('year') else [])
+
+        if not department_ids or not years:
+            return Response({'error': 'department_ids and years (or department_id/year) are required'}, status=status.HTTP_400_BAD_REQUEST)
+
         try:
-            # Generate single combined timetable for all selected departments and years
             ga = GeneticAlgorithm(
-                department_ids=data['department_ids'],
-                years=data['years'],
+                department_ids=department_ids,
+                years=years,
                 semester=data['semester'],
                 population_size=data.get('population_size', 50),
                 mutation_rate=data.get('mutation_rate', 0.1),
@@ -182,27 +250,33 @@ class TimetableViewSet(viewsets.ModelViewSet):
             )
             best_solution, fitness = ga.evolve()
 
-            # Create timetable name with all departments and years
-            department_names = [dept.name for dept in ga.departments]
-            year_names = [f"Year {year}" for year in sorted(data['years'])]
+            # naming metadata
+            departments_qs = Department.objects.filter(id__in=department_ids)
+            department_names = [d.name for d in departments_qs]
+            year_names = [f"Year {y}" for y in sorted(years)]
             timetable_name = f"Combined Timetable - {', '.join(department_names)} - {', '.join(year_names)} - Semester {data['semester']} - {uuid.uuid4().hex[:8]}"
 
-            # Use first department as primary department for the timetable record
-            primary_department = ga.departments.first()
+            # choose a primary department record (first) for the DB object
+            primary_department = departments_qs.first()
 
-            timetable = Timetable.objects.create(
-                name=timetable_name,
-                department=primary_department,
-                year=min(data['years']),  # Use minimum year as primary
-                semester=data['semester'],
-                fitness=fitness,
-                created_by=request.user.username if request.user.is_authenticated else "admin"
-            )
+            with transaction.atomic():
+                timetable = Timetable.objects.create(
+                    name=timetable_name,
+                    department=primary_department,
+                    year=min(years),
+                    semester=data['semester'],
+                    fitness=fitness,
+                    created_by=request.user.username if request.user.is_authenticated else "admin"
+                )
 
-            if best_solution:
-                for class_data in best_solution:
-                    if all([class_data.get('instructor'), class_data.get('room'), class_data.get('meeting_time')]):
-                        if class_data['duration'] == 2 and class_data.get('consecutive_slots'):
+                if best_solution:
+                    for class_data in best_solution:
+                        # ensure required keys exist in class_data
+                        if not all(k in class_data for k in ('instructor', 'room', 'meeting_time', 'course', 'section')):
+                            continue
+
+                        # handle 2-hour (consecutive) labs vs 1-hour classes
+                        if class_data.get('duration', 1) == 2 and class_data.get('consecutive_slots'):
                             for i, slot in enumerate(class_data['consecutive_slots']):
                                 class_id = f"{class_data['id']}_slot_{i}_{uuid.uuid4().hex[:4]}"
                                 class_obj = Class.objects.create(
@@ -226,9 +300,10 @@ class TimetableViewSet(viewsets.ModelViewSet):
                             )
                             timetable.classes.add(class_obj)
 
-            if fitness >= 80:
-                timetable.is_active = True
-                timetable.save()
+                # activate automatically for high quality
+                if fitness >= 80:
+                    timetable.is_active = True
+                    timetable.save()
 
             return Response({
                 'message': 'Combined timetable generated successfully',
@@ -236,11 +311,12 @@ class TimetableViewSet(viewsets.ModelViewSet):
                 'fitness': fitness,
                 'total_classes': len(best_solution) if best_solution else 0,
                 'departments': department_names,
-                'years': sorted(data['years']),
+                'years': sorted(years),
                 'semester': data['semester']
             }, status=status.HTTP_201_CREATED)
 
         except Exception as e:
+            logger.exception("Timetable generation failed")
             return Response({'error': f'Failed to generate timetable: {str(e)}'}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
     # ----------------------------------------
@@ -255,8 +331,8 @@ class TimetableViewSet(viewsets.ModelViewSet):
         for cls in classes:
             day = cls.meeting_time.day
             time_slot = f"{cls.meeting_time.start_time}-{cls.meeting_time.end_time}"
-            if time_slot not in schedule[day]:
-                schedule[day][time_slot] = []
+            schedule.setdefault(day, {})
+            schedule[day].setdefault(time_slot, [])
             schedule[day][time_slot].append({
                 'course': cls.course.course_name,
                 'course_id': cls.course.course_id,

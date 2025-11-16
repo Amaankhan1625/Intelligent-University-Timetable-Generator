@@ -1,23 +1,74 @@
-logs
-*.log
+# -------------------------
+# Node / Next.js ignores
+# -------------------------
+
+node_modules/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 pnpm-debug.log*
-lerna-debug.log*
 
-node_modules
-dist
-dist-ssr
+# Next.js build and cache
+.next/
+.next/cache/
+.next/trace/
+.next/server/
+out/
+dist/
+build/
+*.gz
+
+# Local environment
 *.local
 
+# -------------------------
+# Python / Django ignores
+# -------------------------
+
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.pyc
+*.db
+*.sqlite3
+db.sqlite3
+
+# Virtual environment
+env/
+venv/
+ENV/
+*.egg-info/
+.eggs/
+
+# Django collected static files
+staticfiles/
+media/
+
+# -------------------------
+# OS & IDE files
+# -------------------------
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+*.swp
+*.swo
+
+# VSCode
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
+
+# JetBrains IDEs
+.idea/
+
+# Misc
+.suo
 *.ntvs*
 *.njsproj
 *.sln
 *.sw?
 .env
+.env.*

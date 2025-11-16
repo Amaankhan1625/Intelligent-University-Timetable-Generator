@@ -1,7 +1,0 @@
-{
-  "/page": "app/page.js",
-  "/login/page": "app/login/page.js",
-  "/dashboard/timetables/page": "app/dashboard/timetables/page.js",
-  "/dashboard/page": "app/dashboard/page.js",
-  "/dashboard/timetables/[id]/page": "app/dashboard/timetables/[id]/page.js"
-}
