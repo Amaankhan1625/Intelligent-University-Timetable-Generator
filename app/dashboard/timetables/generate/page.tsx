@@ -60,15 +60,18 @@ export default function GenerateTimetablePage() {
 
     try {
       const response = await api.post('/timetables/generate/', data)
-
-      const generatedCount = response.data.generated_timetables?.length || 0
-      const errorCount = response.data.errors?.length || 0
+      const timetableId = response.data.timetable_id
+      const fitness = response.data.fitness
 
       toast.success(
-        `Generated ${generatedCount} timetable(s)${errorCount > 0 ? ` with ${errorCount} error(s)` : ''}!`
+        `Timetable generated successfully (Fitness: ${fitness?.toFixed?.(1) ?? fitness}%)`
       )
 
-      router.push('/dashboard/timetables')
+      if (timetableId) {
+        router.push(`/dashboard/timetables/${timetableId}`)
+      } else {
+        router.push('/dashboard/timetables')
+      }
     } catch (error: any) {
       toast.error(error.response?.data?.error || 'Failed to generate timetables')
     } finally {
@@ -126,7 +129,9 @@ export default function GenerateTimetablePage() {
                       value={year}
                       className="mr-3"
                     />
-                    <span className="text-sm font-medium">{year}{year === 1 ? 'st' : year === 2 ? 'nd' : year === 3 ? 'rd' : 'th'} Year</span>
+                    <span className="text-sm font-medium">
+                      {year}{year === 1 ? 'st' : year === 2 ? 'nd' : year === 3 ? 'rd' : 'th'} Year
+                    </span>
                   </label>
                 ))}
               </div>
@@ -150,7 +155,7 @@ export default function GenerateTimetablePage() {
                 />
                 <div className="flex items-center">
                   <div className="w-4 h-4 border-2 border-gray-300 rounded-full mr-3 flex items-center justify-center">
-                    <div className="w-2 h-2 bg-gray-900 rounded-full opacity-0 peer-checked:opacity-100"></div>
+                    <div className="w-2 h-2 bg-gray-900 rounded-full"></div>
                   </div>
                   <span className="text-sm font-medium">1st Semester</span>
                 </div>
@@ -164,7 +169,7 @@ export default function GenerateTimetablePage() {
                 />
                 <div className="flex items-center">
                   <div className="w-4 h-4 border-2 border-gray-300 rounded-full mr-3 flex items-center justify-center">
-                    <div className="w-2 h-2 bg-gray-900 rounded-full opacity-0 peer-checked:opacity-100"></div>
+                    <div className="w-2 h-2 bg-gray-900 rounded-full"></div>
                   </div>
                   <span className="text-sm font-medium">2nd Semester</span>
                 </div>

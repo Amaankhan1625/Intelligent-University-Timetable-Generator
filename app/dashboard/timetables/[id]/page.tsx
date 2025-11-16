@@ -7,15 +7,23 @@ import toast from 'react-hot-toast'
 import TimetableGrid from '@/components/TimetableGrid'
 import { 
   DocumentArrowDownIcon, 
-  CheckCircleIcon,
   ArrowLeftIcon
 } from '@heroicons/react/24/outline'
 import Link from 'next/link'
 
+interface TimetableClass {
+  course: string
+  course_id: string
+  instructor: string
+  room: string
+  section: string
+  course_type: string
+}
+
 interface TimetableData {
   timetable_name: string
   fitness: number
-  schedule: Record<string, Record<string, any[]>>
+  schedule: Record<string, Record<string, TimetableClass[]>>
 }
 
 export default function TimetableDetailPage() {
