@@ -98,12 +98,14 @@ COURSE_TYPES = [
 ]
 
 class Course(models.Model):
+    COURSE_YEAR_CHOICES = [(1, 1), (2, 2), (3, 3), (4, 4)]
     course_id = models.CharField(max_length=20, unique=True)
     course_name = models.CharField(max_length=100)
     course_type = models.CharField(max_length=20, choices=COURSE_TYPES, default='Theory')
     credits = models.IntegerField(default=3)
     max_students = models.IntegerField(default=60)
     duration = models.IntegerField(default=1)  # 1 hr Theory, 2 hr Lab
+    year = models.IntegerField(choices=COURSE_YEAR_CHOICES, default=1)  # Added year field
     sections = models.ManyToManyField(
         'Section',
         related_name='courses'

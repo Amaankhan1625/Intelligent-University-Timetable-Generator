@@ -37,4 +37,7 @@ urlpatterns = [
 
     # Optional profile endpoint
     path('auth/profile/', views.UserProfileView.as_view(), name='user_profile'),
+
+    # Change password endpoint
+    path('auth/change-password/', views.ChangePasswordView.as_view(), name='change_password'),
 ]

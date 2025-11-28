@@ -5,13 +5,7 @@ import { api } from '@/lib/api'
 import { useForm } from 'react-hook-form'
 import toast from 'react-hot-toast'
 import Modal from '@/components/Modal'
-import { 
-  PlusIcon, 
-  PencilIcon, 
-  TrashIcon, 
-  BookOpenIcon,
-  AcademicCapIcon
-} from '@heroicons/react/24/outline'
+import { PlusIcon, PencilIcon, TrashIcon } from '@heroicons/react/24/outline'
 
 interface Course {
   id?: number
@@ -21,94 +15,55 @@ interface Course {
   credits: number
   max_students: number
   duration: number
-  sections: number[]
-  section_names?: string[]
   classes_per_week: number
-  instructors: number[]
-  instructor_names?: string[]
-}
-
-interface Section {
-  id: number
-  section_name: string
   year: number
-  semester: number
-  department_name: string
 }
-
-interface Instructor {
-  id: number
-  name: string
-  instructor_id: string
-}
-
-const courseTypes = [
-  { value: 'Theory', label: 'Theory' },
-  { value: 'Lab', label: 'Laboratory' },
-  { value: 'Practical', label: 'Practical' },
-]
 
 export default function CoursesPage() {
   const [courses, setCourses] = useState<Course[]>([])
-  const [sections, setSections] = useState<Section[]>([])
-  const [instructors, setInstructors] = useState<Instructor[]>([])
   const [loading, setLoading] = useState(true)
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [editingCourse, setEditingCourse] = useState<Course | null>(null)
 
-  const { register, handleSubmit, reset, setValue, watch, formState: { errors } } = useForm<Course>({
-    defaultValues: {
-      course_type: 'Theory',
-      credits: 3,
-      max_students: 60,
-      duration: 1,
-      classes_per_week: 3,
-      instructors: [],
-      sections: []
-    }
-  })
-
-  const courseType = watch('course_type')
+  const { register, handleSubmit, reset, setValue, formState: { errors } } = useForm<Course>()
 
   useEffect(() => {
-    Promise.all([fetchCourses(), fetchSections(), fetchInstructors()])
+    fetchCourses()
   }, [])
 
-  useEffect(() => {
-    // Auto-adjust duration based on course type
-    if (courseType === 'Lab') {
-      setValue('duration', 2)
-    } else {
-      setValue('duration', 1)
-    }
-  }, [courseType, setValue])
-
-  const fetchCourses = async () => {
+const fetchCourses = async () => {
+    setLoading(true)
     try {
-      const response = await api.get('/courses/')
-      setCourses(response.data.results || response.data)
+      let allCourses: Course[] = []
+      let nextUrl = '/courses/?limit=100'
+      while (nextUrl) {
+        const response = await api.get(nextUrl)
+        const data = response.data
+        const results = data.results || data
+        allCourses = allCourses.concat(results)
+        nextUrl = data.next || null
+      }
+
+      // group courses by year
+      const coursesByYear: Record<number, Course[]> = {}
+      allCourses.forEach((course: Course) => {
+        if (!coursesByYear[course.year]) {
+          coursesByYear[course.year] = []
+        }
+        coursesByYear[course.year].push(course)
+      })
+
+      // sort each group by full course_id string then flatten the result preserving year order
+      const sortedCourses = Object.keys(coursesByYear)
+        .map(yearStr => parseInt(yearStr, 10))
+        .sort((a, b) => a - b)
+        .flatMap(year => coursesByYear[year].sort((a: Course, b: Course) => a.course_id.localeCompare(b.course_id)))
+
+      setCourses(sortedCourses)
     } catch (error) {
       toast.error('Failed to fetch courses')
     } finally {
       setLoading(false)
-    }
-  }
-
-  const fetchSections = async () => {
-    try {
-      const response = await api.get('/sections/')
-      setSections(response.data.results || response.data)
-    } catch (error) {
-      console.error('Failed to fetch sections')
-    }
-  }
-
-  const fetchInstructors = async () => {
-    try {
-      const response = await api.get('/instructors/')
-      setInstructors(response.data.results || response.data)
-    } catch (error) {
-      console.error('Failed to fetch instructors')
     }
   }
 
@@ -121,11 +76,21 @@ export default function CoursesPage() {
         await api.post('/courses/', data)
         toast.success('Course created successfully')
       }
-      
+
       fetchCourses()
       closeModal()
     } catch (error: any) {
-      toast.error(error.response?.data?.message || 'Operation failed')
+      if (error.response?.data) {
+        const errors = error.response.data
+        if (typeof errors === 'object') {
+          const errorMessages = Object.values(errors).flat().join(', ')
+          toast.error(errorMessages || 'Validation failed')
+        } else {
+          toast.error(errors.message || errors || 'Operation failed')
+        }
+      } else {
+        toast.error('Operation failed')
+      }
     }
   }
 
@@ -149,15 +114,7 @@ export default function CoursesPage() {
       })
     } else {
       setEditingCourse(null)
-      reset({
-        course_type: 'Theory',
-        credits: 3,
-        max_students: 60,
-        duration: 1,
-        classes_per_week: 3,
-        instructors: [],
-        sections: []
-      })
+      reset()
     }
     setIsModalOpen(true)
   }
@@ -168,19 +125,6 @@ export default function CoursesPage() {
     reset()
   }
 
-  const getCourseTypeColor = (type: string) => {
-    switch (type) {
-      case 'Lab':
-        return 'bg-green-100 text-green-800'
-      case 'Theory':
-        return 'bg-blue-100 text-blue-800'
-      case 'Practical':
-        return 'bg-yellow-100 text-yellow-800'
-      default:
-        return 'bg-gray-100 text-gray-800'
-    }
-  }
-
   if (loading) {
     return (
       <div className="space-y-6">
@@ -188,14 +132,12 @@ export default function CoursesPage() {
           <div className="h-8 bg-gray-200 rounded w-48 animate-pulse"></div>
           <div className="h-10 bg-gray-200 rounded w-32 animate-pulse"></div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {[...Array(6)].map((_, i) => (
-            <div key={i} className="card p-6 animate-pulse">
-              <div className="h-6 bg-gray-200 rounded mb-4"></div>
-              <div className="h-4 bg-gray-200 rounded mb-2"></div>
-              <div className="h-4 bg-gray-200 rounded w-2/3"></div>
-            </div>
-          ))}
+        <div className="card p-6">
+          <div className="space-y-4">
+            {[...Array(5)].map((_, i) => (
+              <div key={i} className="h-16 bg-gray-200 rounded animate-pulse"></div>
+            ))}
+          </div>
         </div>
       </div>
     )
@@ -206,7 +148,7 @@ export default function CoursesPage() {
       <div className="flex justify-between items-center">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">Courses</h1>
-          <p className="text-gray-600">Manage academic courses and subjects</p>
+          <p className="text-gray-600">Manage academic courses</p>
         </div>
         <button
           onClick={() => openModal()}
@@ -217,135 +159,80 @@ export default function CoursesPage() {
         </button>
       </div>
 
-      {courses.length === 0 ? (
-        <div className="card p-12 text-center">
-          <BookOpenIcon className="h-16 w-16 text-gray-400 mx-auto mb-4" />
-          <h3 className="text-lg font-medium text-gray-900 mb-2">No courses yet</h3>
-          <p className="text-gray-600 mb-6">
-            Add your first course to start building the curriculum
-          </p>
-          <button
-            onClick={() => openModal()}
-            className="btn-primary inline-flex items-center gap-2"
-          >
-            <PlusIcon className="h-5 w-5" />
-            Add First Course
-          </button>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-          {courses.map((course) => (
-            <div key={course.id} className="card p-6">
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex items-center flex-1">
-                  <div className="flex-shrink-0 mr-3">
-                    {course.course_type === 'Lab' ? (
-                      <AcademicCapIcon className="h-8 w-8 text-green-600" />
-                    ) : (
-                      <BookOpenIcon className="h-8 w-8 text-blue-600" />
-                    )}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <h3 className="font-semibold text-gray-900 truncate">
-                      {course.course_name}
-                    </h3>
-                    <p className="text-sm text-gray-600 font-mono">
-                      {course.course_id}
-                    </p>
-                  </div>
-                </div>
-                <div className="flex gap-1 ml-2">
-                  <button
-                    onClick={() => openModal(course)}
-                    className="text-blue-600 hover:text-blue-900 p-1"
-                  >
-                    <PencilIcon className="h-4 w-4" />
-                  </button>
-                  <button
-                    onClick={() => deleteCourse(course.id!)}
-                    className="text-red-600 hover:text-red-900 p-1"
-                  >
-                    <TrashIcon className="h-4 w-4" />
-                  </button>
-                </div>
-              </div>
-              
-              <div className="space-y-2 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Type:</span>
-                  <span className={`px-2 py-1 rounded-full text-xs font-medium ${getCourseTypeColor(course.course_type)}`}>
-                    {course.course_type}
-                  </span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Credits:</span>
-                  <span className="font-medium">{course.credits}</span>
-                </div>
-                {course.section_names && course.section_names.length > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-gray-500">Sections:</span>
-                    <span className="font-medium text-xs">{course.section_names.join(', ')}</span>
-                  </div>
-                )}
-                <div className="flex justify-between">
-                  <span className="text-gray-500">Max Students:</span>
-                  <span className="font-medium">{course.max_students}</span>
-                </div>
-              </div>
-
-              {course.instructor_names && course.instructor_names.length > 0 && (
-                <div className="mt-4 pt-4 border-t border-gray-200">
-                  <div className="text-sm">
-                    <span className="text-gray-500">Instructors:</span>
-                    <div className="mt-1 text-xs">
-                      {course.instructor_names.map((name, index) => (
-                        <div key={index} className="text-gray-900">• {name}</div>
-                      ))}
+      <div className="card">
+        <div className="overflow-x-auto">
+          <table className="min-w-full">
+            <thead>
+              <tr className="table-header">
+                <th className="px-6 py-3 text-left">Course ID</th>
+                <th className="px-6 py-3 text-left">Name</th>
+                <th className="px-6 py-3 text-left">Type</th>
+                <th className="px-6 py-3 text-left">Credits</th>
+                <th className="px-6 py-3 text-left">Max Students</th>
+                <th className="px-6 py-3 text-left">Duration</th>
+                <th className="px-6 py-3 text-left">Classes/Week</th>
+                <th className="px-6 py-3 text-left">Year</th>
+                <th className="px-6 py-3 text-left">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {courses.map((course) => (
+                <tr key={course.id} className="hover:bg-gray-50">
+                  <td className="table-cell font-mono">{course.course_id}</td>
+                  <td className="table-cell font-medium">{course.course_name}</td>
+                  <td className="table-cell">{course.course_type}</td>
+                  <td className="table-cell">{course.credits}</td>
+                  <td className="table-cell">{course.max_students}</td>
+                  <td className="table-cell">{course.duration}h</td>
+                  <td className="table-cell">{course.classes_per_week}</td>
+                  <td className="table-cell">{course.year}</td>
+                  <td className="table-cell">
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => openModal(course)}
+                        className="text-blue-600 hover:text-blue-900"
+                      >
+                        <PencilIcon className="h-4 w-4" />
+                      </button>
+                      <button
+                        onClick={() => deleteCourse(course.id!)}
+                        className="text-red-600 hover:text-red-900"
+                      >
+                        <TrashIcon className="h-4 w-4" />
+                      </button>
                     </div>
-                  </div>
-                </div>
-              )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+
+          {courses.length === 0 && (
+            <div className="text-center py-8 text-gray-500">
+              No courses found. Add your first course to get started.
             </div>
-          ))}
+          )}
         </div>
-      )}
+      </div>
 
       <Modal
         isOpen={isModalOpen}
         onClose={closeModal}
         title={editingCourse ? 'Edit Course' : 'Add New Course'}
       >
-        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4 max-h-96 overflow-y-auto">
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Course ID
-              </label>
-              <input
-                {...register('course_id', { required: 'Course ID is required' })}
-                className="input-field"
-                placeholder="e.g., CS101"
-              />
-              {errors.course_id && (
-                <p className="text-red-600 text-sm mt-1">{errors.course_id.message}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Course Type
-              </label>
-              <select
-                {...register('course_type', { required: 'Course type is required' })}
-                className="input-field"
-              >
-                {courseTypes.map(type => (
-                  <option key={type.value} value={type.value}>
-                    {type.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+        <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Course ID
+            </label>
+            <input
+              {...register('course_id', { required: 'Course ID is required' })}
+              className="input-field"
+              placeholder="e.g., CS101"
+            />
+            {errors.course_id && (
+              <p className="text-red-600 text-sm mt-1">{errors.course_id.message}</p>
+            )}
           </div>
 
           <div>
@@ -355,7 +242,7 @@ export default function CoursesPage() {
             <input
               {...register('course_name', { required: 'Course name is required' })}
               className="input-field"
-              placeholder="e.g., Introduction to Programming"
+              placeholder="Full course name"
             />
             {errors.course_name && (
               <p className="text-red-600 text-sm mt-1">{errors.course_name.message}</p>
@@ -364,77 +251,35 @@ export default function CoursesPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Sections
+              Course Type
             </label>
             <select
-              {...register('sections')}
-              multiple
+              {...register('course_type', { required: 'Course type is required' })}
               className="input-field"
-              size={4}
             >
-              {sections.map(section => (
-                <option key={section.id} value={section.id}>
-                  {section.section_name} (Y{section.year} S{section.semester} - {section.department_name})
-                </option>
-              ))}
+              <option value="">Select type</option>
+              <option value="Theory">Theory</option>
+              <option value="Lab">Lab</option>
+              <option value="Practical">Practical</option>
             </select>
-            <p className="text-xs text-gray-500 mt-1">
-              Hold Ctrl/Cmd to select multiple sections
-            </p>
+            {errors.course_type && (
+              <p className="text-red-600 text-sm mt-1">{errors.course_type.message}</p>
+            )}
           </div>
 
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Credits
-              </label>
-              <input
-                {...register('credits', { 
-                  required: 'Credits is required',
-                  min: { value: 1, message: 'Minimum 1 credit' }
-                })}
-                type="number"
-                className="input-field"
-                placeholder="3"
-              />
-              {errors.credits && (
-                <p className="text-red-600 text-sm mt-1">{errors.credits.message}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Duration (hrs)
-              </label>
-              <input
-                {...register('duration', { 
-                  required: 'Duration is required',
-                  min: { value: 1, message: 'Minimum 1 hour' }
-                })}
-                type="number"
-                className="input-field"
-                placeholder={courseType === 'Lab' ? '2' : '1'}
-                readOnly={courseType === 'Lab'}
-              />
-              {courseType === 'Lab' && (
-                <p className="text-xs text-gray-500 mt-1">Lab sessions are 2 hours</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                Classes/Week
-              </label>
-              <input
-                {...register('classes_per_week', { 
-                  required: 'Classes per week is required',
-                  min: { value: 1, message: 'Minimum 1 class' }
-                })}
-                type="number"
-                className="input-field"
-                placeholder="3"
-              />
-            </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Credits
+            </label>
+            <input
+              {...register('credits', { required: 'Credits are required', valueAsNumber: true })}
+              type="number"
+              className="input-field"
+              placeholder="e.g., 3"
+            />
+            {errors.credits && (
+              <p className="text-red-600 text-sm mt-1">{errors.credits.message}</p>
+            )}
           </div>
 
           <div>
@@ -442,13 +287,10 @@ export default function CoursesPage() {
               Max Students
             </label>
             <input
-              {...register('max_students', { 
-                required: 'Max students is required',
-                min: { value: 1, message: 'Minimum 1 student' }
-              })}
+              {...register('max_students', { required: 'Max students is required', valueAsNumber: true })}
               type="number"
               className="input-field"
-              placeholder="60"
+              placeholder="e.g., 60"
             />
             {errors.max_students && (
               <p className="text-red-600 text-sm mt-1">{errors.max_students.message}</p>
@@ -457,23 +299,51 @@ export default function CoursesPage() {
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
-              Instructors
+              Duration (hours)
+            </label>
+            <input
+              {...register('duration', { required: 'Duration is required', valueAsNumber: true })}
+              type="number"
+              className="input-field"
+              placeholder="e.g., 1"
+            />
+            {errors.duration && (
+              <p className="text-red-600 text-sm mt-1">{errors.duration.message}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Classes per Week
+            </label>
+            <input
+              {...register('classes_per_week', { required: 'Classes per week is required', valueAsNumber: true })}
+              type="number"
+              className="input-field"
+              placeholder="e.g., 3"
+            />
+            {errors.classes_per_week && (
+              <p className="text-red-600 text-sm mt-1">{errors.classes_per_week.message}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Year
             </label>
             <select
-              {...register('instructors')}
-              multiple
+              {...register('year', { required: 'Year is required', valueAsNumber: true })}
               className="input-field"
-              size={4}
             >
-              {instructors.map(instructor => (
-                <option key={instructor.id} value={instructor.id}>
-                  {instructor.name} ({instructor.instructor_id})
-                </option>
-              ))}
+              <option value="">Select year</option>
+              <option value={1}>1</option>
+              <option value={2}>2</option>
+              <option value={3}>3</option>
+              <option value={4}>4</option>
             </select>
-            <p className="text-xs text-gray-500 mt-1">
-              Hold Ctrl/Cmd to select multiple instructors
-            </p>
+            {errors.year && (
+              <p className="text-red-600 text-sm mt-1">{errors.year.message}</p>
+            )}
           </div>
 
           <div className="flex gap-3 pt-4">

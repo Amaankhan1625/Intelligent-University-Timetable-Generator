@@ -39,6 +39,25 @@ class UserProfileView(APIView):
 
 
 # ----------------------------------------
+# ✅ Change Password
+# ----------------------------------------
+class ChangePasswordView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def put(self, request):
+        user = request.user
+        serializer = ChangePasswordSerializer(data=request.data)
+        if serializer.is_valid():
+            old_password = serializer.data.get("old_password")
+            if not user.check_password(old_password):
+                return Response({"old_password": ["Wrong password."]}, status=status.HTTP_400_BAD_REQUEST)
+            user.set_password(serializer.data.get("new_password"))
+            user.save()
+            return Response(status=status.HTTP_204_NO_CONTENT)
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+
+# ----------------------------------------
 # ✅ Scheduler App Endpoints
 # ----------------------------------------
 class InstructorViewSet(viewsets.ModelViewSet):
@@ -54,9 +73,10 @@ class RoomViewSet(viewsets.ModelViewSet):
 
 
 class MeetingTimeViewSet(viewsets.ModelViewSet):
-    queryset = MeetingTime.objects.all()
+    queryset = MeetingTime.objects.all().order_by('pid')
     serializer_class = MeetingTimeSerializer
     permission_classes = [permissions.IsAuthenticated]
+    pagination_class = None  # Disable pagination for MeetingTime list
 
     @action(detail=False, methods=['post'])
     def populate_default_slots(self, request):
@@ -95,7 +115,12 @@ class CourseViewSet(viewsets.ModelViewSet):
         if department:
             queryset = queryset.filter(department_id=department)
         if year:
-            queryset = queryset.filter(year=year)
+            try:
+                year_int = int(year)
+                queryset = queryset.filter(year=year_int)
+            except ValueError:
+                # Invalid year query parameter; return empty queryset or all courses
+                queryset = queryset.none()
         return queryset
 
 
@@ -250,13 +275,24 @@ class TimetableViewSet(viewsets.ModelViewSet):
             )
             best_solution, fitness = ga.evolve()
 
+            # Log details about generated classes for troubleshooting
+            logger.info(f"Number of classes in best_solution: {len(best_solution) if best_solution else 0}")
+
+            missing_assignments = 0
+            if best_solution:
+                for class_obj in best_solution:
+                    keys = ('instructor', 'room', 'meeting_time', 'course', 'section')
+                    if not all(k in class_obj and class_obj[k] is not None for k in keys):
+                        missing_assignments += 1
+                        
+            logger.info(f"Classes skipped due to missing assignments: {missing_assignments}")
+
             # naming metadata
             departments_qs = Department.objects.filter(id__in=department_ids)
             department_names = [d.name for d in departments_qs]
             year_names = [f"Year {y}" for y in sorted(years)]
             timetable_name = f"Combined Timetable - {', '.join(department_names)} - {', '.join(year_names)} - Semester {data['semester']} - {uuid.uuid4().hex[:8]}"
 
-            # choose a primary department record (first) for the DB object
             primary_department = departments_qs.first()
 
             with transaction.atomic():
@@ -271,11 +307,10 @@ class TimetableViewSet(viewsets.ModelViewSet):
 
                 if best_solution:
                     for class_data in best_solution:
-                        # ensure required keys exist in class_data
-                        if not all(k in class_data for k in ('instructor', 'room', 'meeting_time', 'course', 'section')):
+                        keys = ('instructor', 'room', 'meeting_time', 'course', 'section')
+                        if not all(k in class_data and class_data[k] is not None for k in keys):
                             continue
 
-                        # handle 2-hour (consecutive) labs vs 1-hour classes
                         if class_data.get('duration', 1) == 2 and class_data.get('consecutive_slots'):
                             for i, slot in enumerate(class_data['consecutive_slots']):
                                 class_id = f"{class_data['id']}_slot_{i}_{uuid.uuid4().hex[:4]}"
@@ -300,7 +335,6 @@ class TimetableViewSet(viewsets.ModelViewSet):
                             )
                             timetable.classes.add(class_obj)
 
-                # activate automatically for high quality
                 if fitness >= 80:
                     timetable.is_active = True
                     timetable.save()
@@ -360,6 +394,48 @@ class TimetableViewSet(viewsets.ModelViewSet):
         return response
 
     @action(detail=True, methods=['get'])
+    def export_excel(self, request, pk=None):
+        timetable = self.get_object()
+        excel_content = export_timetable_excel(timetable)
+        response = HttpResponse(
+            excel_content,
+            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+        )
+        response['Content-Disposition'] = f'attachment; filename="{timetable.name}.xlsx"'
+        return response
+
+    # ----------------------------------------
+    # Activate Timetable
+    # ----------------------------------------
+    @action(detail=True, methods=['post'])
+    def activate(self, request, pk=None):
+        timetable = self.get_object()
+        Timetable.objects.filter(
+            department=timetable.department,
+            year=timetable.year,
+            semester=timetable.semester
+        ).update(is_active=False)
+
+        timetable.is_active = True
+        timetable.save()
+        return Response({'message': 'Timetable activated successfully'})
+
+
+# ----------------------------------------
+# ✅ JWT /auth/user/ endpoint for frontend
+# ----------------------------------------
+@api_view(['GET'])
+@permission_classes([permissions.IsAuthenticated])
+def get_user(request):
+    user = request.user
+    return Response({
+        'id': user.id,
+        'username': user.username,
+        'email': user.email,
+        'first_name': user.first_name,
+        'last_name': user.last_name,
+        'is_staff': user.is_staff,
+    })
     def export_excel(self, request, pk=None):
         timetable = self.get_object()
         excel_content = export_timetable_excel(timetable)

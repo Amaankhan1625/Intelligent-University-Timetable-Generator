@@ -48,14 +48,16 @@ api.interceptors.response.use(
 
           return api(originalRequest)
         } catch (refreshError) {
-          // Refresh failed, redirect to login
+          // Refresh failed, clear tokens and reject
           Cookies.remove('access_token')
           Cookies.remove('refresh_token')
-          window.location.href = '/login'
+          // window.location.href = '/login' // <-- REMOVED
+          return Promise.reject(refreshError) // <-- ADDED
         }
       } else {
-        // No refresh token, redirect to login
-        window.location.href = '/login'
+        // No refresh token, just reject
+        // window.location.href = '/login' // <-- REMOVED
+        return Promise.reject(error) // <-- ADDED
       }
     }
 

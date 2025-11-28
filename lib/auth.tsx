@@ -44,6 +44,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Token might be invalid or expired
       Cookies.remove('access_token')
       Cookies.remove('refresh_token')
+      // Rethrow the error so the caller can handle it
+      throw error
     } finally {
       setLoading(false)
     }
@@ -64,6 +66,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Optionally fetch user info after login
       await fetchUser()
     } catch (error: any) {
+      // If login fails, ensure we are logged out
+      logout()
       throw new Error(error.response?.data?.detail || 'Login failed')
     }
   }

@@ -16,17 +16,12 @@ class UserSerializer(serializers.ModelSerializer):
 # Instructor Serializer
 # -------------------------
 class InstructorSerializer(serializers.ModelSerializer):
-    courses = serializers.PrimaryKeyRelatedField(
-        many=True,
-        queryset=Course.objects.all(),
-        required=False
-    )
     course_names = serializers.SerializerMethodField()
     course_ids = serializers.SerializerMethodField()
 
     class Meta:
         model = Instructor
-        fields = '__all__'
+        fields = ['id', 'instructor_id', 'name', 'email', 'is_available', 'course_names', 'course_ids']
 
     def get_course_names(self, obj):
         return [course.course_name for course in obj.courses_teaching.all()]
@@ -68,9 +63,19 @@ class DepartmentSerializer(serializers.ModelSerializer):
 # Course Serializer
 # -------------------------
 class CourseSerializer(serializers.ModelSerializer):
+    sections = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Section.objects.all(),
+        required=False
+    )
+    instructors = serializers.PrimaryKeyRelatedField(
+        many=True,
+        queryset=Instructor.objects.all(),
+        required=False
+    )
     section_names = serializers.SerializerMethodField()
     instructor_names = serializers.SerializerMethodField()
-    instructors = serializers.SerializerMethodField()
+    instructors_detail = serializers.SerializerMethodField()
 
     class Meta:
         model = Course
@@ -82,7 +87,7 @@ class CourseSerializer(serializers.ModelSerializer):
     def get_instructor_names(self, obj):
         return [instructor.name for instructor in obj.instructors.all()]
 
-    def get_instructors(self, obj):
+    def get_instructors_detail(self, obj):
         return [{
             'id': instructor.id,
             'name': instructor.name,
@@ -176,3 +181,11 @@ class TimetableGenerationSerializer(serializers.Serializer):
     mutation_rate = serializers.FloatField(default=0.1, min_value=0.01, max_value=0.5)
     elite_rate = serializers.FloatField(default=0.1, min_value=0.05, max_value=0.3)
     generations = serializers.IntegerField(default=500, min_value=50, max_value=2000)
+
+
+# -------------------------
+# Change Password Serializer
+# -------------------------
+class ChangePasswordSerializer(serializers.Serializer):
+    old_password = serializers.CharField(required=True)
+    new_password = serializers.CharField(required=True)

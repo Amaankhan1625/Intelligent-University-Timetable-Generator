@@ -47,11 +47,22 @@ export default function InstructorsPage() {
         await api.post('/instructors/', data)
         toast.success('Instructor created successfully')
       }
-      
+
       fetchInstructors()
       closeModal()
     } catch (error: any) {
-      toast.error(error.response?.data?.message || 'Operation failed')
+      if (error.response?.data) {
+        // Handle validation errors from DRF
+        const errors = error.response.data
+        if (typeof errors === 'object') {
+          const errorMessages = Object.values(errors).flat().join(', ')
+          toast.error(errorMessages || 'Validation failed')
+        } else {
+          toast.error(errors.message || errors || 'Operation failed')
+        }
+      } else {
+        toast.error('Operation failed')
+      }
     }
   }
 

@@ -60,6 +60,8 @@ class GeneticAlgorithm:
                     class_obj['instructor'] = random.choice(available_instructors)
                 elif self.instructors:
                     class_obj['instructor'] = random.choice(self.instructors)
+                else:
+                    class_obj['instructor'] = None
 
                 # Assign room based on course requirements, fallback to any available
                 suitable_rooms = self._get_suitable_rooms(class_obj['course'])
@@ -67,6 +69,8 @@ class GeneticAlgorithm:
                     class_obj['room'] = random.choice(suitable_rooms)
                 elif self.rooms:
                     class_obj['room'] = random.choice(self.rooms)
+                else:
+                    class_obj['room'] = None
 
                 # Assign meeting time
                 if class_obj['duration'] == 2:
@@ -76,8 +80,14 @@ class GeneticAlgorithm:
                         slots = random.choice(consecutive_slots)
                         class_obj['meeting_time'] = slots[0]
                         class_obj['consecutive_slots'] = slots
+                    else:
+                        class_obj['meeting_time'] = None
+                        class_obj['consecutive_slots'] = []
                 else:
-                    class_obj['meeting_time'] = random.choice(self.meeting_times)
+                    if self.meeting_times:
+                        class_obj['meeting_time'] = random.choice(self.meeting_times)
+                    else:
+                        class_obj['meeting_time'] = None
             
             population.append(individual)
         
@@ -122,7 +132,7 @@ class GeneticAlgorithm:
         total_classes = len(individual)
 
         if total_classes == 0:
-            return 0
+            return 0  # No classes, no fitness
 
         # Count unassigned classes
         for class_obj in individual:
@@ -141,14 +151,21 @@ class GeneticAlgorithm:
                 # Check for conflicts
                 if self._has_conflict(class1, class2):
                     conflicts += 1
-
+        
         # Total penalties: conflicts + unassigned classes
-        total_penalties = conflicts + unassigned_penalty
+        total_penalties = conflicts + (unassigned_penalty * 10)  # Heavily penalize unassigned
 
         # Calculate fitness as percentage (0-100)
         # Penalize both conflicts and unassigned classes
+        # The maximum possible penalties can be simplified. A class can conflict with every other class.
+        # So, for N classes, max conflicts is N*(N-1)/2. Plus N unassigned penalties.
         max_possible_penalties = total_classes * (total_classes - 1) / 2 + total_classes
-        fitness = max(0, (1 - (total_penalties / max(max_possible_penalties, 1))) * 100)
+        
+        # Avoid division by zero
+        if max_possible_penalties == 0:
+            return 100.0 if total_penalties == 0 else 0.0
+
+        fitness = max(0, (1 - (total_penalties / max_possible_penalties)) * 100)
         return fitness
 
     def _has_conflict(self, class1, class2):
@@ -263,7 +280,8 @@ class GeneticAlgorithm:
         best_fitness = 0
         best_individual = None
         generations_without_improvement = 0
-        max_generations_without_improvement = 100
+        # Allow more generations without improvement for more complex problems
+        max_generations_without_improvement = 200
         
         for generation in range(self.generations):
             # Calculate fitness for each individual
@@ -284,8 +302,13 @@ class GeneticAlgorithm:
             if generations_without_improvement >= max_generations_without_improvement:
                 break
             
-            # Perfect solution found
-            if best_fitness >= 95.0:
+            # Perfect solution found - ensure it's actually a complete one
+            is_fully_assigned = all(
+                class_obj.get('instructor') and class_obj.get('room') and class_obj.get('meeting_time')
+                for class_obj in best_individual
+            ) if best_individual else False
+
+            if best_fitness >= 90.0 and is_fully_assigned:
                 break
             
             # Selection
