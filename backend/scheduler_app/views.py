@@ -73,21 +73,21 @@ class RoomViewSet(viewsets.ModelViewSet):
 
 
 class MeetingTimeViewSet(viewsets.ModelViewSet):
-    queryset = MeetingTime.objects.all().order_by('pid')
+    queryset = MeetingTime.objects.all().order_by('day', 'start_time')
     serializer_class = MeetingTimeSerializer
     permission_classes = [permissions.IsAuthenticated]
-    pagination_class = None  # Disable pagination for MeetingTime list
+    pagination_class = None  # no pagination for meeting-times listing
 
     @action(detail=False, methods=['post'])
     def populate_default_slots(self, request):
         """
-        Populate default meeting time slots (9:00-17:00 1hr) for Mon-Sat.
-        Will not duplicate existing identical slots.
+        Populate default meeting time slots (Mon-Fri).
+        Call this endpoint to ensure your DB has the standard slots including the lunch break.
         """
         try:
-            MeetingTime.generate_default_slots()
-            count = MeetingTime.objects.count()
-            return Response({'message': 'Default meeting times generated', 'total_slots': count})
+            created = MeetingTime.generate_default_slots()
+            total = MeetingTime.objects.count()
+            return Response({'message': 'Default meeting times generated', 'created': created, 'total_slots': total})
         except Exception as e:
             logger.exception("Failed to populate default meeting times")
             return Response({'error': str(e)}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -436,31 +436,31 @@ def get_user(request):
         'last_name': user.last_name,
         'is_staff': user.is_staff,
     })
-    def export_excel(self, request, pk=None):
-        timetable = self.get_object()
-        excel_content = export_timetable_excel(timetable)
-        response = HttpResponse(
-            excel_content,
-            content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-        )
-        response['Content-Disposition'] = f'attachment; filename="{timetable.name}.xlsx"'
-        return response
+def export_excel(self, request, pk=None):
+    timetable = self.get_object()
+    excel_content = export_timetable_excel(timetable)
+    response = HttpResponse(
+        excel_content,
+        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+    )
+    response['Content-Disposition'] = f'attachment; filename="{timetable.name}.xlsx"'
+    return response
 
     # ----------------------------------------
     # Activate Timetable
     # ----------------------------------------
-    @action(detail=True, methods=['post'])
-    def activate(self, request, pk=None):
-        timetable = self.get_object()
-        Timetable.objects.filter(
-            department=timetable.department,
-            year=timetable.year,
-            semester=timetable.semester
-        ).update(is_active=False)
+@action(detail=True, methods=['post'])
+def activate(self, request, pk=None):
+    timetable = self.get_object()
+    Timetable.objects.filter(
+        department=timetable.department,
+        year=timetable.year,
+        semester=timetable.semester
+    ).update(is_active=False)
 
-        timetable.is_active = True
-        timetable.save()
-        return Response({'message': 'Timetable activated successfully'})
+    timetable.is_active = True
+    timetable.save()
+    return Response({'message': 'Timetable activated successfully'})
 
 
 # ----------------------------------------

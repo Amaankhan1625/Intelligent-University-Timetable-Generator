@@ -46,13 +46,17 @@ class Room(models.Model):
 # -------------------------
 # MeetingTime
 # -------------------------
+# DAYS for scheduling: only Monday–Friday (per your requirement)
 DAYS_CHOICES = [
-    ('Monday','Monday'), ('Tuesday','Tuesday'), ('Wednesday','Wednesday'),
-    ('Thursday','Thursday'), ('Friday','Friday'), ('Saturday','Saturday')
+    ('Monday', 'Monday'),
+    ('Tuesday', 'Tuesday'),
+    ('Wednesday', 'Wednesday'),
+    ('Thursday', 'Thursday'),
+    ('Friday', 'Friday'),
 ]
 
 class MeetingTime(models.Model):
-    pid = models.CharField(max_length=10, unique=True)
+    pid = models.CharField(max_length=20, unique=True)
     day = models.CharField(max_length=10, choices=DAYS_CHOICES)
     start_time = models.TimeField()
     end_time = models.TimeField()
@@ -65,6 +69,53 @@ class MeetingTime(models.Model):
 
     def __str__(self):
         return f"{self.day} {self.start_time}-{self.end_time}"
+
+    @classmethod
+    def generate_default_slots(cls, overwrite=False):
+        """
+        Create default meeting time slots for Mon–Fri.
+        - Standard class slots (1 hour) from 09:00 to 17:00 except lunch.
+        - Lunch slot is 13:00 - 13:45 (45 minutes) and marked is_lunch_break=True.
+        - If a slot with same day + start_time + end_time exists, it will not duplicate.
+        - If overwrite=True, existing slots with exact times will be skipped but can be removed first externally.
+        """
+        import datetime
+        created = 0
+
+        DAYS = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
+
+        # standard hourly slots: 09:00-10:00, 10:00-11:00, ..., 16:00-17:00
+        hourly_starts = [datetime.time(hour=h, minute=0) for h in range(9, 17)]
+        # lunch slot
+        lunch_start = datetime.time(hour=13, minute=0)
+        lunch_end = datetime.time(hour=13, minute=45)
+
+        for day in DAYS:
+            # Create hourly slots but skip creating a 13:00-14:00 hour; instead we create 13:00-13:45 as lunch
+            for start in hourly_starts:
+                # determine end time for this slot
+                end_hour = (start.hour + 1)
+                end_time = datetime.time(hour=end_hour, minute=0)
+
+                # If this is the 13:00 hourly slot, skip its normal creation; we'll create lunch separately
+                if start == lunch_start:
+                    continue
+
+                # Skip duplicates
+                exists = cls.objects.filter(day=day, start_time=start, end_time=end_time).exists()
+                if not exists:
+                    pid = f"MT-{day[:3].upper()}-{start.strftime('%H%M')}"
+                    cls.objects.create(pid=pid, day=day, start_time=start, end_time=end_time, is_lunch_break=False)
+                    created += 1
+
+            # Ensure lunch slot exists (13:00 - 13:45)
+            lunch_exists = cls.objects.filter(day=day, start_time=lunch_start, end_time=lunch_end).exists()
+            if not lunch_exists:
+                pid = f"MT-{day[:3].upper()}-LUNCH"
+                cls.objects.create(pid=pid, day=day, start_time=lunch_start, end_time=lunch_end, is_lunch_break=True)
+                created += 1
+
+        return created
 
 
 # -------------------------

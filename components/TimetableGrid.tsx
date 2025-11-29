@@ -20,8 +20,8 @@ interface TimetableGridProps {
 // ✅ Only Monday–Friday (no Saturday/Sunday)
 const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 
-// Treat 13:00–14:00 as lunch by convention
-const LUNCH_START_PREFIX = '13:00'
+// Exact canonical lunch slot we will use: 13:00–13:45
+const LUNCH_SLOT = '13:00:00-13:45:00'
 
 export default function TimetableGrid({ schedule, title }: TimetableGridProps) {
   const [timeSlots, setTimeSlots] = useState<string[]>([])
@@ -44,11 +44,9 @@ export default function TimetableGrid({ schedule, title }: TimetableGridProps) {
 
     let slots = Array.from(allTimeSlots)
 
-    // Inject a lunch row if not already present
-    const hasLunch = slots.some(slot => slot.startsWith(LUNCH_START_PREFIX))
-    if (!hasLunch) {
-      // Add a canonical lunch slot; it will still sort correctly
-      slots.push('13:00:00-13:45:00')
+    // Inject the canonical lunch row if not present
+    if (!slots.includes(LUNCH_SLOT)) {
+      slots.push(LUNCH_SLOT)
     }
 
     // Sort by start time (HH:MM:SS-HH:MM:SS)
@@ -104,7 +102,7 @@ export default function TimetableGrid({ schedule, title }: TimetableGridProps) {
     }
   }
 
-  const isLunchSlot = (slot: string) => slot.startsWith(LUNCH_START_PREFIX)
+  const isLunchSlot = (slot: string) => slot === LUNCH_SLOT
 
   // ---- Drag handlers (UI only, no actual change) ----
   const handleDragStart = (event: React.DragEvent<HTMLDivElement>, cls: TimetableClass) => {
@@ -265,3 +263,4 @@ export default function TimetableGrid({ schedule, title }: TimetableGridProps) {
     </div>
   )
 }
+
