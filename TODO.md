@@ -1,8 +1,16 @@
-# TODO: Add Year Option to Courses Page and Sort by Year
+# Timetable Editing Feature Implementation
 
-## Steps to Complete:
-- [ ] Update Course interface to include year: number
-- [ ] Add year select field to the course form in the modal
-- [ ] Add Year column to the table header and rows
-- [ ] Implement sorting of courses by year ascending after fetching data
-- [ ] Test the changes to ensure year field works and sorting is correct
+## Frontend Changes
+- [ ] Update `components/TimetableGrid.tsx` to enable actual drag-and-drop editing
+- [ ] Add conflict checking and popup display in TimetableGrid
+- [ ] Update `app/dashboard/timetables/[id]/page.tsx` to add edit mode toggle
+
+## Backend Changes
+- [ ] Add `update_slot` endpoint in `backend/scheduler_app/views.py` TimetableViewSet
+- [ ] Implement conflict checking logic in views.py
+- [ ] Add utility function in `backend/scheduler_app/utils.py` for instructor conflicts
+
+## Testing
+- [x] Test edit functionality with conflict scenarios
+- [x] Ensure UI updates correctly after successful edits
+- [x] Debug and fix drag-and-drop recognition issues

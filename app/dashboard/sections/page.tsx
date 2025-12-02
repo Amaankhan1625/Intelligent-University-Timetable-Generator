@@ -74,7 +74,10 @@ export default function SectionsPage() {
   const fetchAvailableInstructors = async () => {
     try {
       const res = await api.get('/instructors/')
-      setAvailableInstructors(res.data.results || res.data)
+      const data = res.data.results || res.data
+      // Sort by instructor_id in ascending order
+      const sortedData = data.sort((a: any, b: any) => a.instructor_id.localeCompare(b.instructor_id))
+      setAvailableInstructors(sortedData)
     } catch (err) {
       console.error('❌ Error fetching instructors:', err)
     }
@@ -473,7 +476,7 @@ export default function SectionsPage() {
                         }}
                       >
                         <option value="">Select Instructor</option>
-                        {course.instructors.map(instructor => (
+                        {course.instructors.sort((a: Instructor, b: Instructor) => a.instructor_id.localeCompare(b.instructor_id)).map(instructor => (
                           <option key={instructor.id} value={instructor.id}>
                             {instructor.name} ({instructor.instructor_id})
                           </option>

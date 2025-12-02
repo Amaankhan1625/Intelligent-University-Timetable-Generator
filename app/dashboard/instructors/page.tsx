@@ -30,7 +30,10 @@ export default function InstructorsPage() {
   const fetchInstructors = async () => {
     try {
       const response = await api.get('/instructors/')
-      setInstructors(response.data.results || response.data)
+      const data = response.data.results || response.data
+      // Sort by instructor_id in ascending order
+      const sortedData = data.sort((a: Instructor, b: Instructor) => a.instructor_id.localeCompare(b.instructor_id))
+      setInstructors(sortedData)
     } catch (error) {
       toast.error('Failed to fetch instructors')
     } finally {

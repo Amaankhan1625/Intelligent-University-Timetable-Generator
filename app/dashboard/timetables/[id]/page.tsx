@@ -5,13 +5,15 @@ import { api } from '@/lib/api'
 import { useParams } from 'next/navigation'
 import toast from 'react-hot-toast'
 import TimetableGrid from '@/components/TimetableGrid'
-import { 
-  DocumentArrowDownIcon, 
-  ArrowLeftIcon
+import {
+  DocumentArrowDownIcon,
+  ArrowLeftIcon,
+  PencilIcon
 } from '@heroicons/react/24/outline'
 import Link from 'next/link'
 
 interface TimetableClass {
+  class_id: string
   course: string
   course_id: string
   instructor: string
@@ -26,9 +28,16 @@ interface TimetableData {
   schedule: Record<string, Record<string, TimetableClass[]>>
 }
 
+interface SectionData {
+  section: string
+  schedule: Record<string, Record<string, TimetableClass[]>>
+}
+
 export default function TimetableDetailPage() {
   const [timetable, setTimetable] = useState<TimetableData | null>(null)
+  const [sections, setSections] = useState<SectionData[]>([])
   const [loading, setLoading] = useState(true)
+  const [editMode, setEditMode] = useState(false)
   const params = useParams()
 
   useEffect(() => {
@@ -41,11 +50,42 @@ export default function TimetableDetailPage() {
     try {
       const response = await api.get(`/timetables/${params.id}/view_schedule/`)
       setTimetable(response.data)
+      processSections(response.data.schedule)
     } catch (error) {
       toast.error('Failed to fetch timetable details')
     } finally {
       setLoading(false)
     }
+  }
+
+  const processSections = (schedule: Record<string, Record<string, TimetableClass[]>>) => {
+    const sectionMap = new Map<string, Record<string, Record<string, TimetableClass[]>>>()
+
+    // Group classes by section
+    Object.entries(schedule).forEach(([day, daySchedule]) => {
+      Object.entries(daySchedule).forEach(([timeSlot, classes]) => {
+        classes.forEach((classInfo) => {
+          const section = classInfo.section
+          if (!sectionMap.has(section)) {
+            sectionMap.set(section, {})
+          }
+          if (!sectionMap.get(section)![day]) {
+            sectionMap.get(section)![day] = {}
+          }
+          if (!sectionMap.get(section)![day][timeSlot]) {
+            sectionMap.get(section)![day][timeSlot] = []
+          }
+          sectionMap.get(section)![day][timeSlot].push(classInfo)
+        })
+      })
+    })
+
+    const sectionData: SectionData[] = Array.from(sectionMap.entries()).map(([section, schedule]) => ({
+      section,
+      schedule
+    }))
+
+    setSections(sectionData)
   }
 
   const exportPDF = async () => {
@@ -75,9 +115,9 @@ export default function TimetableDetailPage() {
       const response = await api.get(`/timetables/${params.id}/export_excel/`, {
         responseType: 'blob'
       })
-      
-      const blob = new Blob([response.data], { 
-        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' 
+
+      const blob = new Blob([response.data], {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
       })
       const url = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -87,10 +127,54 @@ export default function TimetableDetailPage() {
       a.click()
       window.URL.revokeObjectURL(url)
       document.body.removeChild(a)
-      
+
       toast.success('Excel exported successfully')
     } catch (error) {
       toast.error('Failed to export Excel')
+    }
+  }
+
+  const handleSlotUpdate = async (classId: string, newDay: string, newTime: string) => {
+    try {
+      console.log('Updating class slot:', { classId, newDay, newTime })
+      await api.patch('/classes/update_slot/', {
+        class_id: classId,
+        day: newDay,
+        time_slot: newTime
+      })
+      console.log('API call successful')
+
+      // Refresh the timetable data after successful update
+      await fetchTimetable()
+    } catch (error: any) {
+      console.error('Failed to update class slot:', error)
+
+      // Extract meaningful error message from API response
+      let errorMessage = 'Failed to move class'
+      if (error.response?.data) {
+        if (error.response.data.error) {
+          errorMessage = error.response.data.error
+        } else if (error.response.data.detail) {
+          errorMessage = error.response.data.detail
+        } else if (error.response.data.conflicts) {
+          // Handle conflict details
+          const conflicts = error.response.data.conflicts
+          errorMessage = `Conflict detected: ${conflicts.map((c: any) => `${c.type} conflict for ${c.course}`).join(', ')}`
+        }
+      }
+
+      // Create a new error with the user-friendly message
+      const userError = new Error(errorMessage)
+      throw userError
+    }
+  }
+
+  const toggleEditMode = () => {
+    setEditMode(!editMode)
+    if (!editMode) {
+      toast.success('Edit mode enabled. Click on a class to select it, then click on an empty slot to move it.')
+    } else {
+      toast.success('Edit mode disabled.')
     }
   }
 
@@ -155,6 +239,13 @@ export default function TimetableDetailPage() {
         
         <div className="flex gap-2">
           <button
+            onClick={toggleEditMode}
+            className={`btn-secondary flex items-center gap-2 ${editMode ? 'bg-blue-600 text-white' : ''}`}
+          >
+            <PencilIcon className="h-5 w-5" />
+            {editMode ? 'Exit Edit Mode' : 'Move Classes'}
+          </button>
+          <button
             onClick={exportPDF}
             className="btn-secondary flex items-center gap-2"
           >
@@ -171,10 +262,31 @@ export default function TimetableDetailPage() {
         </div>
       </div>
 
-      <TimetableGrid 
-        schedule={timetable.schedule}
-        title="Weekly Schedule"
-      />
+      {editMode && (
+        <div className="card p-4 bg-blue-50 border-blue-200">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-blue-800">
+              <strong>Edit Mode:</strong> Click on a class to select it, then click on an empty slot to move it.
+            </div>
+            <button
+              onClick={() => setEditMode(false)}
+              className="btn-secondary text-xs"
+            >
+              Cancel Edit
+            </button>
+          </div>
+        </div>
+      )}
+
+      {sections.map((sectionData) => (
+        <TimetableGrid
+          key={sectionData.section}
+          schedule={sectionData.schedule}
+          title={`Timetable for ${sectionData.section}`}
+          editMode={editMode}
+          onSlotUpdate={handleSlotUpdate}
+        />
+      ))}
 
       {timetable.fitness < 80 && (
         <div className="card p-6 bg-yellow-50 border-yellow-200">

@@ -17,6 +17,8 @@ interface Course {
   duration: number
   classes_per_week: number
   year: number
+  department?: number
+  department_name?: string
 }
 
 export default function CoursesPage() {
@@ -171,6 +173,7 @@ const fetchCourses = async () => {
                 <th className="px-6 py-3 text-left">Max Students</th>
                 <th className="px-6 py-3 text-left">Duration</th>
                 <th className="px-6 py-3 text-left">Classes/Week</th>
+                <th className="px-6 py-3 text-left">Department</th>
                 <th className="px-6 py-3 text-left">Year</th>
                 <th className="px-6 py-3 text-left">Actions</th>
               </tr>
@@ -185,6 +188,7 @@ const fetchCourses = async () => {
                   <td className="table-cell">{course.max_students}</td>
                   <td className="table-cell">{course.duration}h</td>
                   <td className="table-cell">{course.classes_per_week}</td>
+                  <td className="table-cell">{course.department_name || 'N/A'}</td>
                   <td className="table-cell">{course.year}</td>
                   <td className="table-cell">
                     <div className="flex gap-2">
@@ -324,6 +328,25 @@ const fetchCourses = async () => {
             />
             {errors.classes_per_week && (
               <p className="text-red-600 text-sm mt-1">{errors.classes_per_week.message}</p>
+            )}
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Department
+            </label>
+            <select
+              {...register('department', { required: 'Department is required', valueAsNumber: true })}
+              className="input-field"
+            >
+              <option value="">Select department</option>
+              {/* TODO: Fetch departments dynamically */}
+              <option value={1}>Computer Science</option>
+              <option value={2}>Electrical Engineering</option>
+              <option value={3}>Mechanical Engineering</option>
+            </select>
+            {errors.department && (
+              <p className="text-red-600 text-sm mt-1">{errors.department.message}</p>
             )}
           </div>
 

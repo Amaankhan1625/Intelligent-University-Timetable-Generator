@@ -44,7 +44,9 @@ export default function MeetingTimesPage() {
       const data = Array.isArray(res.data)
         ? res.data
         : res.data.results || []
-      setMeetingTimes(data)
+      // Sort by pid in ascending order
+      const sortedData = data.sort((a: MeetingTime, b: MeetingTime) => a.pid.localeCompare(b.pid))
+      setMeetingTimes(sortedData)
     } catch (err) {
       console.error('❌ Error fetching meeting times:', err)
       toast.error('Failed to fetch meeting times')

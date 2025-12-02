@@ -9,6 +9,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 import logging
 import uuid
+import datetime
 
 from .models import (
     Instructor, Room, MeetingTime, Department,
@@ -16,7 +17,7 @@ from .models import (
 )
 from .serializers import *
 from .genetic_algorithm import GeneticAlgorithm
-from .utils import export_timetable_pdf, export_timetable_excel
+from .utils import export_timetable_pdf, export_timetable_excel, check_instructor_conflicts, check_slot_conflicts
 
 logger = logging.getLogger(__name__)
 
@@ -96,13 +97,13 @@ class MeetingTimeViewSet(viewsets.ModelViewSet):
 class DepartmentViewSet(viewsets.ModelViewSet):
     queryset = Department.objects.all()
     serializer_class = DepartmentSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = []
 
 
 class CourseViewSet(viewsets.ModelViewSet):
     queryset = Course.objects.all()
     serializer_class = CourseSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = []
 
     def get_queryset(self):
         """
@@ -127,7 +128,7 @@ class CourseViewSet(viewsets.ModelViewSet):
 class SectionViewSet(viewsets.ModelViewSet):
     queryset = Section.objects.all()
     serializer_class = SectionSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = []
 
     def get_queryset(self):
         queryset = Section.objects.all()
@@ -194,21 +195,18 @@ class SectionViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def auto_assign_courses(self, request, pk=None):
         """
-        Assign department/year/semester matching courses to this section.
+        Assign year and department matching courses to this section.
         Useful to quickly populate sections with their standard course lists.
         """
         section = self.get_object()
         try:
-            dept_courses = Course.objects.filter(
-                department=section.department,
-                year=section.year,
-                semester=section.semester
-            )
-            section.courses.set(dept_courses)
+            # Assign courses for the year and department to match section
+            year_courses = Course.objects.filter(year=section.year, department=section.department)
+            section.courses.set(year_courses)
             return Response({
                 'message': 'Courses auto-assigned to section',
                 'section': section.section_id,
-                'assigned_count': dept_courses.count()
+                'assigned_count': year_courses.count()
             })
         except Exception as e:
             logger.exception("Failed to auto-assign courses to section")
@@ -219,12 +217,117 @@ class ClassViewSet(viewsets.ModelViewSet):
     queryset = Class.objects.all()
     serializer_class = ClassSerializer
     permission_classes = [permissions.IsAuthenticated]
+    lookup_field = 'class_id'  # Use class_id instead of pk for URL lookups
+
+    @action(detail=False, methods=['patch'])
+    def update_slot(self, request):
+        """
+        Update the meeting time slot for a specific class.
+        Expected payload: { "class_id": "class_id_here", "day": "Monday", "time_slot": "09:00-10:00" }
+        """
+        class_id = request.data.get('class_id')
+        if not class_id:
+            return Response(
+                {'error': 'class_id is required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            class_obj = Class.objects.get(class_id=class_id)
+        except Class.DoesNotExist:
+            return Response(
+                {'error': f'Class with class_id {class_id} not found'},
+                status=status.HTTP_404_NOT_FOUND
+            )
+        day = request.data.get('day')
+        time_slot = request.data.get('time_slot')
+
+        if not day or not time_slot:
+            return Response(
+                {'error': 'Both day and time_slot are required'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            # Parse the time slot to find the matching MeetingTime
+            start_time_str, end_time_str = time_slot.split('-')
+            logger.info(f"Parsing time_slot: {time_slot}, start_time_str: {start_time_str}")
+
+            # Try parsing with seconds first, then fallback to minutes only
+            try:
+                start_time = datetime.datetime.strptime(start_time_str.strip(), '%H:%M:%S').time()
+            except ValueError:
+                # Fallback to HH:MM format
+                start_time = datetime.datetime.strptime(start_time_str.strip(), '%H:%M').time()
+
+            # Find the meeting time that matches the day and start time
+            meeting_time = MeetingTime.objects.get(
+                day=day,
+                start_time=start_time
+            )
+
+            # Check for conflicts before updating
+            conflicts = check_slot_conflicts(
+                timetable=class_obj.timetables.first(),  # Get the timetable this class belongs to
+                new_day=day,
+                new_start_time=start_time,
+                instructor_id=class_obj.instructor_id,
+                room_id=class_obj.room_id,
+                section_id=class_obj.section_id,
+                exclude_class_id=class_obj.class_id
+            )
+
+            if conflicts:
+                # Group conflicts by type
+                conflict_messages = []
+                for conflict in conflicts:
+                    conflict_messages.append(
+                        f"{conflict['type'].title()} conflict: {conflict['course']} "
+                        f"({conflict['section']}) at {conflict['day']} {conflict['time']}"
+                    )
+
+                return Response(
+                    {
+                        'error': 'Cannot move class due to conflicts',
+                        'conflicts': conflicts,
+                        'conflict_messages': conflict_messages
+                    },
+                    status=status.HTTP_409_CONFLICT
+                )
+
+            # Update the class with the new meeting time
+            class_obj.meeting_time = meeting_time
+            class_obj.save()
+
+            return Response({
+                'message': 'Class slot updated successfully',
+                'class_id': class_obj.class_id,
+                'new_day': day,
+                'new_time_slot': time_slot
+            })
+
+        except MeetingTime.DoesNotExist:
+            return Response(
+                {'error': f'No meeting time found for {day} at {start_time_str}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except ValueError as e:
+            return Response(
+                {'error': f'Invalid time format: {str(e)}'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+        except Exception as e:
+            logger.exception("Failed to update class slot")
+            return Response(
+                {'error': f'Failed to update class slot: {str(e)}'},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
 
 
 class TimetableViewSet(viewsets.ModelViewSet):
     queryset = Timetable.objects.all()
     serializer_class = TimetableSerializer
-    permission_classes = [permissions.IsAuthenticated]
+    permission_classes = []
 
     def get_queryset(self):
         queryset = Timetable.objects.all()
@@ -239,7 +342,7 @@ class TimetableViewSet(viewsets.ModelViewSet):
     # ----------------------------------------
     # Generate Timetable (Genetic Algorithm)
     # ----------------------------------------
-    @action(detail=False, methods=['post'])
+    @action(detail=False, methods=['post'], permission_classes=[])
     def generate(self, request):
         """
         Expected POST JSON shape (examples):
@@ -263,17 +366,33 @@ class TimetableViewSet(viewsets.ModelViewSet):
         if not department_ids or not years:
             return Response({'error': 'department_ids and years (or department_id/year) are required'}, status=status.HTTP_400_BAD_REQUEST)
 
+        # Auto-assign courses to sections if not already assigned
+        departments = Department.objects.filter(id__in=department_ids)
+        sections = Section.objects.filter(
+            department__in=departments,
+            year__in=years,
+            semester=data['semester']
+        )
+        for section in sections:
+            if section.courses.count() == 0:
+                # Assign courses for the year and department to match section
+                year_courses = Course.objects.filter(year=section.year, department=section.department)
+                section.courses.set(year_courses)
+
         try:
+            logger.info(f"Starting GA with department_ids={department_ids}, years={years}, semester={data['semester']}")
             ga = GeneticAlgorithm(
                 department_ids=department_ids,
                 years=years,
                 semester=data['semester'],
-                population_size=data.get('population_size', 50),
+                population_size=data.get('population_size', 100),
                 mutation_rate=data.get('mutation_rate', 0.1),
                 elite_rate=data.get('elite_rate', 0.1),
-                generations=data.get('generations', 500)
+                generations=data.get('generations', 1000)
             )
+            logger.info(f"GA initialized with {len(ga.all_classes)} classes")
             best_solution, fitness = ga.evolve()
+            logger.info(f"GA completed with fitness {fitness}, best_solution length: {len(best_solution) if best_solution else 0}")
 
             # Log details about generated classes for troubleshooting
             logger.info(f"Number of classes in best_solution: {len(best_solution) if best_solution else 0}")
@@ -311,29 +430,16 @@ class TimetableViewSet(viewsets.ModelViewSet):
                         if not all(k in class_data and class_data[k] is not None for k in keys):
                             continue
 
-                        if class_data.get('duration', 1) == 2 and class_data.get('consecutive_slots'):
-                            for i, slot in enumerate(class_data['consecutive_slots']):
-                                class_id = f"{class_data['id']}_slot_{i}_{uuid.uuid4().hex[:4]}"
-                                class_obj = Class.objects.create(
-                                    class_id=class_id,
-                                    course=class_data['course'],
-                                    instructor=class_data['instructor'],
-                                    meeting_time=slot,
-                                    room=class_data['room'],
-                                    section=class_data['section']
-                                )
-                                timetable.classes.add(class_obj)
-                        else:
-                            class_id = f"{class_data['id']}_{uuid.uuid4().hex[:4]}"
-                            class_obj = Class.objects.create(
-                                class_id=class_id,
-                                course=class_data['course'],
-                                instructor=class_data['instructor'],
-                                meeting_time=class_data['meeting_time'],
-                                room=class_data['room'],
-                                section=class_data['section']
-                            )
-                            timetable.classes.add(class_obj)
+                        class_id = f"{class_data['id']}_{uuid.uuid4().hex[:4]}"
+                        class_obj = Class.objects.create(
+                            class_id=class_id,
+                            course=class_data['course'],
+                            instructor=class_data['instructor'],
+                            meeting_time=class_data['meeting_time'],
+                            room=class_data['room'],
+                            section=class_data['section']
+                        )
+                        timetable.classes.add(class_obj)
 
                 if fitness >= 80:
                     timetable.is_active = True
@@ -364,17 +470,30 @@ class TimetableViewSet(viewsets.ModelViewSet):
         schedule = {day: {} for day in ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday']}
         for cls in classes:
             day = cls.meeting_time.day
-            time_slot = f"{cls.meeting_time.start_time}-{cls.meeting_time.end_time}"
-            schedule.setdefault(day, {})
-            schedule[day].setdefault(time_slot, [])
-            schedule[day][time_slot].append({
-                'course': cls.course.course_name,
-                'course_id': cls.course.course_id,
-                'instructor': cls.instructor.name,
-                'room': cls.room.room_number,
-                'section': cls.section.section_id,
-                'course_type': cls.course.course_type
-            })
+            # Calculate actual end time based on course duration
+            duration_hours = getattr(cls.course, 'duration', 1)
+            start_time = cls.meeting_time.start_time
+
+            # For multi-hour classes, split into individual 1-hour slots
+            for i in range(duration_hours):
+                slot_start = datetime.time(hour=(start_time.hour + i) % 24, minute=start_time.minute)
+                slot_end = datetime.time(hour=(slot_start.hour + 1) % 24, minute=slot_start.minute)
+                time_slot = f"{slot_start}-{slot_end}"
+                is_start = (i == 0)
+                schedule.setdefault(day, {})
+                schedule[day].setdefault(time_slot, [])
+                schedule[day][time_slot].append({
+                    'class_id': cls.class_id,
+                    'course': cls.course.course_name,
+                    'course_id': cls.course.course_id,
+                    'instructor': cls.instructor.name,
+                    'room': cls.room.room_number,
+                    'section': cls.section.section_id,
+                    'course_type': cls.course.course_type,
+                    'duration': duration_hours,
+                    'is_start': is_start,
+                    'colspan': duration_hours if is_start else 1
+                })
 
         return Response({
             'timetable_name': timetable.name,
@@ -419,48 +538,6 @@ class TimetableViewSet(viewsets.ModelViewSet):
         timetable.is_active = True
         timetable.save()
         return Response({'message': 'Timetable activated successfully'})
-
-
-# ----------------------------------------
-# ✅ JWT /auth/user/ endpoint for frontend
-# ----------------------------------------
-@api_view(['GET'])
-@permission_classes([permissions.IsAuthenticated])
-def get_user(request):
-    user = request.user
-    return Response({
-        'id': user.id,
-        'username': user.username,
-        'email': user.email,
-        'first_name': user.first_name,
-        'last_name': user.last_name,
-        'is_staff': user.is_staff,
-    })
-def export_excel(self, request, pk=None):
-    timetable = self.get_object()
-    excel_content = export_timetable_excel(timetable)
-    response = HttpResponse(
-        excel_content,
-        content_type='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
-    )
-    response['Content-Disposition'] = f'attachment; filename="{timetable.name}.xlsx"'
-    return response
-
-    # ----------------------------------------
-    # Activate Timetable
-    # ----------------------------------------
-@action(detail=True, methods=['post'])
-def activate(self, request, pk=None):
-    timetable = self.get_object()
-    Timetable.objects.filter(
-        department=timetable.department,
-        year=timetable.year,
-        semester=timetable.semester
-    ).update(is_active=False)
-
-    timetable.is_active = True
-    timetable.save()
-    return Response({'message': 'Timetable activated successfully'})
 
 
 # ----------------------------------------

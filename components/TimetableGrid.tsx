@@ -4,17 +4,23 @@ import { useState, useEffect } from 'react'
 import toast from 'react-hot-toast'
 
 interface TimetableClass {
+  class_id: string
   course: string
   course_id: string
   instructor: string
   room: string
   section: string
   course_type: string
+  duration?: number
+  is_start?: boolean
+  colspan?: number
 }
 
 interface TimetableGridProps {
   schedule: Record<string, Record<string, TimetableClass[]>>
   title?: string
+  editMode?: boolean
+  onSlotUpdate?: (classId: string, newDay: string, newTime: string) => Promise<void>
 }
 
 // ✅ Only Monday–Friday (no Saturday/Sunday)
@@ -23,40 +29,29 @@ const days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday']
 // Exact canonical lunch slot we will use: 13:00–13:45
 const LUNCH_SLOT = '13:00:00-13:45:00'
 
-export default function TimetableGrid({ schedule, title }: TimetableGridProps) {
+export default function TimetableGrid({ schedule, title, editMode, onSlotUpdate }: TimetableGridProps) {
   const [timeSlots, setTimeSlots] = useState<string[]>([])
   const [courseLegend, setCourseLegend] = useState<{
     course_id: string
     course: string
     instructors: string[]
   }[]>([])
+  const [selectedClass, setSelectedClass] = useState<TimetableClass | null>(null)
 
   useEffect(() => {
-    // ---- Collect all time slots present in schedule ----
-    const allTimeSlots = new Set<string>()
+    // ---- Use standard consecutive time slots based on meeting times ----
+    const standardTimeSlots = [
+      '09:00:00-10:00:00',
+      '10:00:00-11:00:00',
+      '11:00:00-12:00:00',
+      '12:00:00-13:00:00',
+      '13:00:00-13:45:00', // Lunch break
+      '13:45:00-14:45:00',
+      '14:45:00-15:45:00',
+      '15:45:00-16:45:00'
+    ]
 
-    Object.entries(schedule || {}).forEach(([day, daySchedule]) => {
-      if (!days.includes(day)) return // ignore Saturday, etc
-      Object.keys(daySchedule || {}).forEach(timeSlot => {
-        allTimeSlots.add(timeSlot)
-      })
-    })
-
-    let slots = Array.from(allTimeSlots)
-
-    // Inject the canonical lunch row if not present
-    if (!slots.includes(LUNCH_SLOT)) {
-      slots.push(LUNCH_SLOT)
-    }
-
-    // Sort by start time (HH:MM:SS-HH:MM:SS)
-    slots.sort((a, b) => {
-      const startA = a.split('-')[0]
-      const startB = b.split('-')[0]
-      return startA.localeCompare(startB)
-    })
-
-    setTimeSlots(slots)
+    setTimeSlots(standardTimeSlots)
 
     // ---- Build course legend (unique courses with instructors) ----
     const legendMap = new Map<string, { course_id: string; course: string; instructors: Set<string> }>()
@@ -102,24 +97,53 @@ export default function TimetableGrid({ schedule, title }: TimetableGridProps) {
     }
   }
 
-  const isLunchSlot = (slot: string) => slot === LUNCH_SLOT
-
-  // ---- Drag handlers (UI only, no actual change) ----
-  const handleDragStart = (event: React.DragEvent<HTMLDivElement>, cls: TimetableClass) => {
-    // Just store something so the browser allows drag
-    event.dataTransfer.setData('text/plain', JSON.stringify(cls))
+  const isLunchSlot = (slot: string) => {
+    const [start, end] = slot.split('-')
+    return start === '13:00:00' && end === '13:45:00'
   }
 
-  const handleDragOver = (event: React.DragEvent<HTMLTableCellElement>) => {
-    event.preventDefault()
+  const handleClassClick = (classData: TimetableClass) => {
+    if (!editMode) {
+      toast.error('Enable edit mode to move classes')
+      return
+    }
+    setSelectedClass(classData)
+    toast.success(`Selected ${classData.course}. Now click on an empty slot to move it.`)
   }
 
-  const handleDrop = (event: React.DragEvent<HTMLTableCellElement>) => {
-    event.preventDefault()
-    // Show message and do nothing else (no state change)
-    toast.error('Timetable is fixed by the genetic algorithm. Manual changes are not allowed.', {
-      duration: 4000
-    })
+  const handleSlotClick = async (day: string, timeSlot: string) => {
+    if (!editMode || !selectedClass) return
+
+    // Don't allow moving to lunch slots
+    if (isLunchSlot(timeSlot)) {
+      toast.error('Cannot move classes to lunch break slots')
+      return
+    }
+
+    // Check if the slot is already occupied
+    const existingClasses = schedule[day]?.[timeSlot] || []
+    if (existingClasses.length > 0) {
+      toast.error('This slot is already occupied. Please choose an empty slot.')
+      return
+    }
+
+    try {
+      console.log('Moving class:', selectedClass.class_id, 'to', day, timeSlot)
+
+      // Call the onSlotUpdate callback with the new slot information
+      await onSlotUpdate?.(selectedClass.class_id, day, timeSlot)
+
+      toast.success(`Moved ${selectedClass.course} to ${day} ${formatTimeSlotLabel(timeSlot)}`)
+      setSelectedClass(null)
+    } catch (error) {
+      console.error('Error moving class:', error)
+      toast.error('Failed to move class - check console for details')
+    }
+  }
+
+  const cancelSelection = () => {
+    setSelectedClass(null)
+    toast.success('Selection cancelled')
   }
 
   const formatTimeSlotLabel = (slot: string) => {
@@ -129,53 +153,70 @@ export default function TimetableGrid({ schedule, title }: TimetableGridProps) {
   }
 
   return (
-    <div className="card overflow-hidden">
-      {title && (
-        <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
-          <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+    <div className="space-y-6">
+      {editMode && selectedClass && (
+        <div className="card p-4 bg-green-50 border-green-200">
+          <div className="flex items-center justify-between">
+            <div className="text-sm text-green-800">
+              <strong>Selected Class:</strong> {selectedClass.course} ({selectedClass.instructor})
+              <br />
+              <span className="text-xs">Click on an empty slot to move this class there.</span>
+            </div>
+            <button
+              onClick={cancelSelection}
+              className="btn-secondary text-xs"
+            >
+              Cancel Selection
+            </button>
+          </div>
         </div>
       )}
-      
-      <div className="overflow-x-auto">
-        <table className="min-w-full border-collapse">
-          <thead className="bg-gray-50">
-            <tr>
-              <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-28 border-b border-r border-gray-200">
-                Time
-              </th>
-              {days.map(day => (
-                <th
-                  key={day}
-                  className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b border-gray-200"
-                >
-                  {day}
+
+      {/* First Table: Schedule Grid */}
+      <div className="card overflow-hidden">
+        {title && (
+          <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+            <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+          </div>
+        )}
+
+        <div className="overflow-x-auto">
+          <table className="min-w-full border-collapse">
+            <thead className="bg-gray-50">
+              <tr>
+                <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24 border-b border-r border-gray-200">
+                  Day
                 </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="bg-white">
-            {timeSlots.map(timeSlot => {
-              const lunch = isLunchSlot(timeSlot)
-              return (
-                <tr key={timeSlot} className="border-t border-gray-200">
-                  {/* Time column */}
-                  <td className={`px-4 py-3 text-xs font-semibold text-gray-800 bg-gray-50 border-r border-gray-200 whitespace-nowrap ${lunch ? 'text-blue-700' : ''}`}>
+                {timeSlots.map(timeSlot => (
+                  <th
+                    key={timeSlot}
+                    className={`px-2 py-2 text-center text-xs font-medium text-gray-500 uppercase tracking-wider border-b border-gray-200 ${isLunchSlot(timeSlot) ? 'text-blue-700' : ''}`}
+                  >
                     {formatTimeSlotLabel(timeSlot)}
-                    {lunch && <span className="block text-[10px] text-blue-600 mt-1">LUNCH BREAK</span>}
+                    {isLunchSlot(timeSlot) && <span className="block text-[10px] text-blue-600 mt-1">LUNCH</span>}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="bg-white">
+              {days.map(day => (
+                <tr key={day} className="border-t border-gray-200">
+                  {/* Day column */}
+                  <td className="px-2 py-2 text-xs font-semibold text-gray-800 bg-gray-50 border-r border-gray-200 whitespace-nowrap">
+                    {day}
                   </td>
 
-                  {/* Day columns */}
-                  {days.map(day => {
+                  {/* Time columns */}
+                  {timeSlots.map((timeSlot, slotIndex) => {
                     const dayClasses = schedule[day]?.[timeSlot] || []
+                    const lunch = isLunchSlot(timeSlot)
 
                     if (lunch) {
-                      // Force lunch row to show lunch block for all days
+                      // Force lunch column to show lunch block for all days
                       return (
                         <td
                           key={`${day}-${timeSlot}`}
                           className="px-2 py-2 align-middle border-r border-gray-200 bg-blue-50"
-                          onDragOver={handleDragOver}
-                          onDrop={handleDrop}
                         >
                           <div className="h-full flex items-center justify-center text-[11px] font-semibold text-blue-800 select-none">
                             LUNCH BREAK
@@ -184,79 +225,127 @@ export default function TimetableGrid({ schedule, title }: TimetableGridProps) {
                       )
                     }
 
+                    // Check if this slot should be skipped due to colspan from previous multi-hour class
+                    const previousSlots = timeSlots.slice(0, slotIndex)
+                    let skipSlot = false
+                    for (const prevSlot of previousSlots) {
+                      const prevClasses = schedule[day]?.[prevSlot] || []
+                      for (const prevClass of prevClasses) {
+                        if (prevClass.is_start && prevClass.colspan && prevClass.colspan > 1) {
+                          const startIndex = timeSlots.indexOf(prevSlot)
+                          const endIndex = startIndex + prevClass.colspan - 1
+                          if (slotIndex <= endIndex) {
+                            skipSlot = true
+                            break
+                          }
+                        }
+                      }
+                      if (skipSlot) break
+                    }
+
+                    if (skipSlot) {
+                      return null
+                    }
+
+                    // Check if there's a multi-hour class starting at this slot
+                    const multiHourClass = dayClasses.find(cls => cls.is_start && cls.colspan && cls.colspan > 1)
+
                     return (
                       <td
                         key={`${day}-${timeSlot}`}
-                        className="px-2 py-2 align-top border-r border-gray-200"
-                        onDragOver={handleDragOver}
-                        onDrop={handleDrop}
+                        className={`px-2 py-2 align-top border-r border-gray-200 ${editMode && !dayClasses.length ? 'cursor-pointer hover:bg-blue-50' : ''}`}
+                        colSpan={multiHourClass ? multiHourClass.colspan : 1}
+                        onClick={() => editMode && !dayClasses.length && handleSlotClick(day, timeSlot)}
                       >
-                        <div className="min-h-[80px] space-y-1">
+                        <div className="min-h-[60px] space-y-1">
                           {dayClasses.map((classInfo, index) => (
                             <div
                               key={index}
-                              className={`${getCourseTypeColor(classInfo.course_type)} cursor-grab active:cursor-grabbing select-none`}
-                              draggable
-                              onDragStart={(e) => handleDragStart(e, classInfo)}
+                              className={`${getCourseTypeColor(classInfo.course_type)} ${editMode ? 'cursor-pointer hover:ring-2 hover:ring-blue-300' : ''} select-none`}
+                              onClick={() => editMode && handleClassClick(classInfo)}
                             >
                               <div className="font-semibold text-xs">
-                                {classInfo.course_id || classInfo.course}
-                              </div>
-                              <div className="text-[11px] opacity-90">
                                 {classInfo.course}
                               </div>
-                              <div className="text-[11px] mt-1 space-y-[2px]">
-                                <div>👨‍🏫 {classInfo.instructor}</div>
-                                <div>🏠 {classInfo.room}</div>
-                                <div>👥 {classInfo.section}</div>
+                              {multiHourClass && classInfo.is_start && (
+                                <div className="text-[10px] text-gray-600 mt-1">
+                                  {formatTimeSlotLabel(timeSlot)} - {formatTimeSlotLabel(timeSlots[slotIndex + (classInfo.colspan || 1) - 1])}
+                                </div>
+                              )}
+                              <div className="text-[10px] text-gray-600 mt-1">
+                                {classInfo.room && `Room: ${classInfo.room}`}
+                              </div>
+                              <div className="text-[10px] text-gray-600">
+                                {classInfo.instructor}
                               </div>
                             </div>
                           ))}
+                          {editMode && !dayClasses.length && (
+                            <div className="text-center text-gray-400 text-xs py-4">
+                              Click to place selected class
+                            </div>
+                          )}
                         </div>
                       </td>
                     )
                   })}
                 </tr>
-              )
-            })}
+              ))}
 
-            {timeSlots.length === 0 && (
-              <tr>
-                <td
-                  colSpan={days.length + 1}
-                  className="text-center py-8 text-gray-500"
-                >
-                  No classes scheduled
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+              {days.length === 0 && (
+                <tr>
+                  <td
+                    colSpan={timeSlots.length + 1}
+                    className="text-center py-8 text-gray-500"
+                  >
+                    No classes scheduled
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
       </div>
 
-      {/* Legend: Course ↔ Faculty mapping */}
+      {/* Second Table: Instructor Information */}
       {courseLegend.length > 0 && (
-        <div className="border-t border-gray-200 px-6 py-4 bg-gray-50">
-          <h4 className="text-sm font-semibold text-gray-900 mb-2">
-            Course & Faculty Mapping
-          </h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-2 max-h-48 overflow-y-auto">
-            {courseLegend.map(item => (
-              <div
-                key={item.course_id || item.course}
-                className="flex flex-col text-xs text-gray-800 bg-white rounded-md border border-gray-200 px-3 py-2"
-              >
-                <span className="font-semibold">
-                  {item.course_id && (
-                    <span className="mr-1">{item.course_id}</span>
-                  )}
-                  - {item.course}
-                </span>
-                <span className="text-[11px] text-gray-600 mt-1">
-                  Faculty: {item.instructors.join(', ')}
-                </span>
-              </div>
-            ))}
+        <div className="card overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-200 bg-gray-50">
+            <h3 className="text-lg font-semibold text-gray-900">Instructor Information</h3>
+          </div>
+
+          <div className="overflow-x-auto">
+            <table className="min-w-full border-collapse">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b border-r border-gray-200">
+                    Instructor
+                  </th>
+                  <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider border-b border-gray-200">
+                    Courses & Course Codes
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="bg-white">
+                {courseLegend.map(item => (
+                  <tr key={item.course_id || item.course} className="border-t border-gray-200">
+                    <td className="px-2 py-2 text-xs font-medium text-gray-900 border-r border-gray-200">
+                      {item.instructors.join(', ')}
+                    </td>
+                    <td className="px-2 py-2 text-xs text-gray-700">
+                      <div className="space-y-1">
+                        <div className="font-semibold">
+                          {item.course_id && (
+                            <span className="mr-2 text-blue-600">{item.course_id}</span>
+                          )}
+                          {item.course}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       )}
